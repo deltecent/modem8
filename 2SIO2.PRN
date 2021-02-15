@@ -1,0 +1,326 @@
+
+
+                ;	2SIO2.ASM
+                ;
+                ;	Driver Overlay for MODEM8
+                ;
+                ;	This module provides the device-dependent information to be used
+                ;	by MODEM8.  It should be modified for your modem port, assembled
+                ;	with ASM, and the resulting .HEX file renamed to .MDM
+                ;
+                ; 	THIS file should  always  be used to configure  MODEM8  for your 
+                ;	system, rather than modifying MODEM8.ASM.
+                
+ 000D =         CR	equ	0dH
+ 000A =         LF	equ	0aH
+ 0007 =         BELL	equ	07H
+ 0008 =         BS	equ	08H
+ 0009 =         TAB	equ	09H
+                
+ 00FF =         TRUE	equ	0ffH
+ 0000 =         FALSE	equ	0
+                
+                ;	Baud Rate Codes
+                
+ 0001 =         b100	equ	1
+ 0002 =         b300	equ	2
+ 0003 =         b600	equ	3
+ 0004 =         b1200	equ	4
+ 0005 =         b2400	equ	5
+ 0006 =         b4800	equ	6
+ 0007 =         b9600	equ	7
+ 0008 =         b19200	equ	8
+                
+                
+                ;	This driver is for a M. I. T. S. 2-SIO
+                
+                ;	2K is reserved for drivers - from 103H to 902H
+                
+ 0103           	org	103h
+                
+                ;
+                ;	DO NOT modify the locations of the jump table or the variables!
+                ;
+                
+ 0103 04        ModVer:	db	4		; expected MODEM8 major version number
+                
+ 0104 C38F03    ModIni:	jmp	MdmIni		; modem initialization
+ 0107 C39603    ModStI:	jmp	MdmStI		; modem input status
+ 010A C39B03    ModStO:	jmp	MdmStO		; modem output status
+ 010D C3A003    ModInp:	jmp	MdmInp		; modem character input
+ 0110 C3A303    ModOut:	jmp	MdmOut		; modem character output
+ 0113 C3A603    ModFin:	jmp	MdmFin		; modem de-initialization
+ 0116 C3A903    ModBrk:	jmp	MdmBrk		; modem send break
+ 0119 C3AA03    ModChg:	jmp	MdmChg		; modem parameters have changed
+ 011C C30F04    ModDial:jmp	MdmDial		; dial phone number
+ 011F C31004    ModHup:	jmp	MdmHup		; hang up phone
+ 0122 C31104    ModCD:	jmp	MdmCD		; modem carrier detect
+                
+                ;
+                ;	Initial variable values
+                ;
+                
+ 0125 FF        FulDpx:	db	TRUE		; Full Duplex Mode
+ 0126 00        HostMd:	db	FALSE		; Host Mode (Echo characters received)
+ 0127 FF        WtChar:	db	TRUE		; Wait for echo during ascii send
+ 0128 C800      DlyVal:	dw	200		; Delay constant -- 100 * CPU speed in MHz
+ 012A FF        TrigFlg:db	TRUE		; Wait for Trigger during ASCII send
+ 012B FF        XltCtrl:db	TRUE		; Translate control characters
+ 012C 00        QFlg:	db	FALSE		; Don't print messages in send/receive
+ 012D 18        PLen:	db	24		; Length of console 'page'
+ 012E FF        TryCRC:	db	TRUE		; Attempt CRC mode (instead of checksum)
+ 012F 00        SendLF:	db	FALSE		; Transmit LF's during ASCII send
+ 0130 1C        Prefix:	db	'\'-40H		; Command Prefix during terminal mode
+                ;
+                ;	The following variables are considered 'modem parameters'.
+                ;	This means that they have something to do with the state or
+                ;	behaviour of the modem.  Whenever any of these parameters
+                ;	are changed during the course of execution, the driver is
+                ;	notified by a call to ModChg in case commands must be sent
+                ;	to the modem or its interface.
+                ;
+                ;	Inappropriate parameters may be ignored.  Applicable parameters
+                ;	set to unavailable values should be changed to some default
+                ;	value.
+                ;
+ 0131 FF        Pulse:	db	TRUE		; Use pulse dialing instead of touch-tone
+ 0132 02        Speed:	db	b300		; Baud rate for transmissions (see codes above)
+ 0133 00        Parity:	db	0		; Type of parity generation/checking:
+                				;	0 = none
+                				;	1 = odd
+                				;	2 = even
+ 0134 08        DatBit:	db	8		; Number of data bits
+ 0135 01        StpBit:	db	1		; Number of stop bits
+                
+                ;
+                ;	Character Strings are terminated by a 0 byte.
+                ;	At most 40 characters are allowed per string, including
+                ;	     the terminator byte.
+                ;	To put a NUL in a string use 80h
+                ;
+ 0136 4D49545320DevNam: db	'MITS 2-SIO '	; Device Name
+ 0141 56322E302C	db	'V2.0, port ','0'+Mdm/10,'0'+Mdm mod 10,0
+ 014F           	ds	40-($-DevNam)	;	pad out to 40 characters
+                
+ 015E 0D0A00    Trigger:db	CR,LF,0		; Trigger string
+ 0161           	ds	40-($-Trigger)	;	pad out to 40 characters
+                
+ 0186 1300      Pause:	db	('S'-40H),0	; Pause String
+ 0188           	ds	40-($-Pause)	;	pad out to 40 characters
+                
+ 01AE 1100      Release:db	('Q'-40H),0	; Release String
+ 01B0           	ds	40-($-Release)	;	pad out to 40 characters
+                
+                NotXlt:			; Control characters that are not translated to
+                				; '^char' in 'Translate Ctrl-Chr' terminal mode
+ 01D6 0D0A0800  	db	CR,LF,BS,0
+ 01DA           	ds	40-($-NotXlt)	;	pad out to 40 characters
+                
+                FilPass:		; Control characters that are saved in File Save mode
+ 01FE 0D0A0900  	db	CR,LF,TAB,0
+ 0202           	ds	40-($-FilPass)	;	pad out to 40 characters
+                
+                ;	Number Table
+                ;
+                ;	Entries in the number table are strings with the same
+                ;	format and restrictions as other strings described above.
+                ;
+                ;	Entries contain two parts separated by a colon (':').
+                ;	The first part is the name of the person or system associated
+                ;	with the phone number.  The second part is a phone number
+                ;	string as described below.
+                ;
+                ;	Characters in a phone number string may be:
+                ;		0-9,*,#		dial the corresponding number
+                ;				note that the * and # may be dialed in
+                ;				touch-tone mode only, if at all
+                ;				they should be ignored if they cannot
+                ;				be dialed
+                ;		P		pause and check for a dial tone
+                ;				if this cannot be implemented directly,
+                ;				make it the same as W
+                ;		W		wait for a short period of time
+                ;				normally used before P
+                ;
+                ;	Any other characters in a phone number string should be ignored.
+                
+ 0226 09        MaxNum:	db	9		; Maximum number of phone numbers allowed
+                				; This may be set to any value as long as
+                				; enough space is reserved in Numbers below
+                Numbers:
+ 0227 00        Num1:	db	0
+ 0228           	ds	40-($-Num1)
+ 024F 00        Num2:	db	0
+ 0250           	ds	40-($-Num2)
+ 0277 00        Num3:	db	0
+ 0278           	ds	40-($-Num3)
+ 029F 00        Num4:	db	0
+ 02A0           	ds	40-($-Num4)
+ 02C7 00        Num5:	db	0
+ 02C8           	ds	40-($-Num5)
+ 02EF 00        Num6:	db	0
+ 02F0           	ds	40-($-Num6)
+ 0317 00        Num7:	db	0
+ 0318           	ds	40-($-Num7)
+ 033F 00        Num8:	db	0
+ 0340           	ds	40-($-Num8)
+ 0367 00        Num9:	db	0
+ 0368           	ds	40-($-Num9)
+                
+                
+                ;
+                ;	This area contains the actual device drivers.
+                ;
+                
+ 0016 =         Mdm	equ	22	;2-SIO status port
+                
+                ;	Equates for the Motorola 6850 ACIA
+                
+                ;	Command Words
+                
+ 0000 =         Clck01	equ	0		;Clock / 1
+ 0001 =         Clck16	equ	1		;Clock / 16
+ 0002 =         Clck64	equ	2		;Clock / 64
+ 0003 =         MReset	equ	3		;Master Reset
+                
+ 0000 =         D7S2EP	equ	0		;Data bits, Stop bits,
+ 0004 =         D7S2OP	equ	4		;Parity (Even, Odd, None)
+ 0008 =         D7S1EP	equ	8
+ 000C =         D7S1OP	equ	0ch
+ 0010 =         D8S2NP	equ	10h
+ 0014 =         D8S1NP	equ	14h
+ 0018 =         D8S1EP	equ	18h
+ 001C =         D8S1Op	equ	1ch
+                
+ 0000 =         NRLTD	equ	0		;Not RTS Level (Low, High),
+ 0020 =         NRLTE	equ	20h		;Transmit Interrupt (Enable, Disable)
+ 0040 =         NRHTD	equ	40h
+ 0060 =         NRHTDB	equ	60h		;Send Break Condition
+                
+ 0000 =         RD	equ	0		;Receive Interrupt (Enable, Disable)
+ 0080 =         RE	equ	80h
+                
+                ;	Status Words
+                
+ 0001 =         RDRF	equ	1		;Receiver Data Ready Flag
+ 0002 =         TDRF	equ	2		;Transmit Data Ready Flag
+ 0004 =         DCD	equ	4		;Not Data Carrier Detect
+ 0008 =         CTS	equ	8		;Not Clear To Send
+ 0010 =         FE	equ	10h		;Framing Error
+ 0020 =         OvRn	equ	20h		;Overrun Error
+ 0040 =         PE	equ	40h		;Parity Error
+ 0080 =         Irq	equ	80h		;Interrupt Request
+                
+                ;	Default Mode Word
+ 0014 =         DfltM	equ	RD+NRLTD+D8S1NP
+                
+ 038F 3E03      MdmIni:	mvi	a,MReset	;clear acia
+ 0391 D316      	out	Mdm
+ 0393 C3AA03    	jmp	MdmChg		;initialize to 'modem parameters'
+                
+ 0396 DB16      MdmStI:	in	Mdm		;return z for not ready, nz for ready
+ 0398 E601      	ani	RDRF		;receiver ready?
+ 039A C9        	ret
+                
+ 039B DB16      MdmStO:	in	Mdm		;return z for not ready, nz for ready
+ 039D E602      	ani	TDRF		;transmitter ready?
+ 039F C9        	ret
+                
+ 03A0 DB17      MdmInp:	in	Mdm+1		;get character
+ 03A2 C9        	ret
+                
+ 03A3 D317      MdmOut:	out	Mdm+1		;send character
+ 03A5 C9        	ret
+                
+ 03A6 C38F03    MdmFin:	jmp	MdmIni		;same as initialization
+                
+ 03A9 C9        MdmBrk:	ret			;not implemented
+                
+                	; Change modem parameters (if applicable)
+ 03AA 3A3201    MdmChg:	lda	Speed		;check for valid baud rate
+ 03AD 0601      	mvi	b,Clck16	;clock/ rate for 1200 baud
+ 03AF FE04      	cpi	b1200		;1200 baud?
+ 03B1 CABB03    	jz	DoDatB		;yes - continue
+ 03B4 3E02      	mvi	a,b300		;no - default to 300 baud
+ 03B6 323201    	sta	Speed		;let user know
+ 03B9 0602      	mvi	b,Clck64	;clock/ rate for 300 baud
+                
+ 03BB 3A3401    DoDatB:	lda	DatBit		;check for valid data bits
+ 03BE FE07      	cpi	7		;not if < 7
+ 03C0 DAFE03    	jc	SDfltM		;invalid - use default settings
+ 03C3 FE09      	cpi	9		;not if >= 9
+ 03C5 D2FE03    	jnc	SDfltM
+ 03C8 1E00      	mvi	e,0		;setup for 7 data bits
+ 03CA D607      	sui	7		;7 data bits?
+ 03CC CAD103    	jz	DoStpB		;yes - continue
+ 03CF 1E06      	mvi	e,6		;no - setup for 8 data bits
+                
+ 03D1 3A3501    DoStpB:	lda	StpBit		;check for valid stop bits
+ 03D4 FE01      	cpi	1		;not if < 1
+ 03D6 DAFE03    	jc	SDfltM
+ 03D9 FE03      	cpi	3		;not if >= 3
+ 03DB D2FE03    	jnc	SDfltM
+ 03DE 3D        	dcr	a		;setup for 1 stop bit
+ 03DF CAE603    	jz	DoPar		;1 stop bit?  yes - continue
+ 03E2 7B        	mov	a,e		;no - setup for 2 stop bits
+ 03E3 C603      	adi	3
+ 03E5 5F        	mov	e,a
+                
+ 03E6 3A3301    DoPar:	lda	Parity		;check for valid parity
+ 03E9 FE03      	cpi	3		;not if >= 3
+ 03EB D2FE03    	jnc	SDfltM
+ 03EE 83        	add	e		;add parity code to offset for data & stop bits
+ 03EF 5F        	mov	e,a		;de = offset into mode table
+ 03F0 1600      	mvi	d,0
+ 03F2 210304    	lxi	h,MTbl		;hl => base of mode table
+ 03F5 19        	dad	d		;hl => mode table (data, stop & parity)
+ 03F6 7E        	mov	a,m		;get mode word
+                
+ 03F7 B0        SetMod:	ora	b		;set clock/ rate for desired baud rate
+ 03F8 321404    	sta	CurM		;setup current mode
+ 03FB D316      	out	Mdm		;send to acia
+ 03FD C9        	ret
+                
+ 03FE 3E14      SDfltM:	mvi	a,DFltM		;use default mode word
+ 0400 C3F703    	jmp	SetMod
+                
+                ;	Mode table for the Motorola 6850 ACIA
+                ;					;Data Bits	Stop Bits	Parity
+ 0403 14        MTbl:	db	DfltM			;7		1		None *
+ 0404 0C        	db	RD+NRLTD+D7S1OP		;7		1		Odd
+ 0405 08        	db	RD+NRLTD+D7S1EP		;7		1		Even
+ 0406 14        	db	DfltM			;7		2		None *
+ 0407 04        	db	RD+NRLTD+D7S2OP		;7		2		Odd
+ 0408 00        	db	RD+NRLTD+D7S2EP		;7		2		Even
+ 0409 14        	db	RD+NRLTD+D8S1NP		;8		1		None
+ 040A 1C        	db	RD+NRLTD+D8S1OP		;8		1		Odd
+ 040B 18        	db	RD+NRLTD+D8S1EP		;8		1		Even
+ 040C 10        	db	RD+NRLTD+D8S2NP		;8		2		None
+ 040D 14        	db	DfltM			;8		2		Odd  *
+ 040E 14        	db	DfltM			;8		2		Even *
+                
+                ;	* not supported - use default mode
+                
+                	; Dial a phone number (if possible)
+                	; See the description of the Numbers table above
+                	; for the form of a phone number string
+                	; A pointer to the phone number to be dialed is passed in [HL]
+                	; [A] will be set to TRUE if the connection should be voice-only
+                	; This allows MODEM8 to be used as an auto-dialer for voice calls
+                	; Ignore this flag if your modem does not make the distinction
+                MdmDial:
+ 040F C9        	ret			;not implemented
+                
+                	; Hang up phone line (if possible)
+                MdmHup:
+ 0410 C9        	ret			;not implemented
+                
+                	; Check state of Carrier Detect from modem
+                	; If this signal is not available, return TRUE always
+                	; The value TRUE or FALSE should be returned in [A]
+ 0411 3EFF      MdmCD:	mvi	a,TRUE
+ 0413 C9        	ret
+                
+ 0414 14        CurM:	db	DfltM		;current mode
+                
+ 0415           	end
